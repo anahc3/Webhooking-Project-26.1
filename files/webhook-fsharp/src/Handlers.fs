@@ -5,15 +5,30 @@ open Microsoft.AspNetCore.Http
 open Giraffe
 open Webhook.Domain
 open Webhook.Validation
+open Webhook.Gateway
 open Webhook.Database
 
-let validatePipeline (token: string option) (rawBody: string) : Result<WebhookPayload, ValidationError> =
+// ============================================================================
+// PIPELINE FUNCIONAL DE VALIDAÇÃO
+// Compõe todas as validações usando Result.bind (>>=)
+// Se qualquer etapa falhar, o pipeline curto-circuita com o erro.
+// ============================================================================
+
+/// Pipeline completo de validação do payload.
+/// Retorna Ok payload (tudo válido) ou Error com o motivo da falha.
+let validatePipeline (token: string option) (signature: string option) (rawBody: string) : Result<WebhookPayload, ValidationError> =
     validateToken token
     |> Result.bind (fun _ -> parsePayload rawBody)
     |> Result.bind extractTransactionId
     |> Result.bind validateRequiredFields
     |> Result.bind (validateNotDuplicate transactionExists)
     |> Result.bind validateAmount
+    |> Result.bind (validateSignature signature rawBody)
+
+// ============================================================================
+// MAPEAMENTO DE ERROS PARA RESPOSTAS HTTP
+// Cada tipo de erro gera uma resposta HTTP específica
+// ============================================================================
 
 type ErrorResponse = {
     status: string
@@ -21,6 +36,8 @@ type ErrorResponse = {
     reason: string
 }
 
+/// Converte ValidationError em (statusCode, response).
+/// Função pura que mapeia o erro para o formato HTTP esperado.
 let errorToResponse (error: ValidationError) : int * ErrorResponse =
     match error with
     | InvalidToken ->
@@ -38,22 +55,49 @@ let errorToResponse (error: ValidationError) : int * ErrorResponse =
     | InvalidSignature txId ->
         400, { status = "cancelled"; transaction_id = Some txId; reason = "invalid signature" }
 
+/// Determina se um erro deve disparar uma chamada de cancelamento ao gateway.
+/// InvalidToken e InvalidPayload NÃO geram cancelamento (não há tx_id confiável).
+/// MissingTransactionId também não, pois não sabemos qual tx cancelar.
+let shouldCancelOnError (error: ValidationError) : string option =
+    match error with
+    | InvalidToken | InvalidPayload | MissingTransactionId -> None
+    | MissingField _ ->
+        // Aqui precisamos extrair o txId em outro lugar (handler abaixo)
+        None  // Tratado separadamente no handler
+    | DuplicateTransaction txId
+    | AmountMismatch txId
+    | InvalidSignature txId -> Some txId
+
+// ============================================================================
+// HANDLER PRINCIPAL DO ENDPOINT /webhook
+// ============================================================================
+
 let webhookHandler : HttpHandler =
     fun (next: HttpFunc) (ctx: HttpContext) ->
         task {
+            // Lê headers
             let token =
                 match ctx.Request.Headers.TryGetValue("X-Webhook-Token") with
                 | true, value -> Some (value.ToString())
                 | _ -> None
 
+            let signature =
+                match ctx.Request.Headers.TryGetValue("X-Signature") with
+                | true, value -> Some (value.ToString())
+                | _ -> None
+
+            // Lê o body bruto (necessário para HMAC)
             use reader = new StreamReader(ctx.Request.Body)
             let! rawBody = reader.ReadToEndAsync()
 
-            let result = validatePipeline token rawBody
+            // Executa o pipeline funcional de validação
+            let result = validatePipeline token signature rawBody
 
+            // Processa o resultado
             match result with
             | Ok payload ->
-                do! Webhook.Gateway.confirmTransaction payload.TransactionId |> Async.StartAsTask :> System.Threading.Tasks.Task
+                // SUCESSO: confirma a transação
+                do! confirmTransaction payload.TransactionId |> Async.StartAsTask :> System.Threading.Tasks.Task
                 saveConfirmed payload
                 ctx.SetStatusCode 200
                 return! json {| status = "confirmed"; transaction_id = payload.TransactionId |} next ctx
@@ -61,9 +105,10 @@ let webhookHandler : HttpHandler =
             | Error err ->
                 let statusCode, response = errorToResponse err
 
+                // Tenta extrair tx_id para cancelamento em caso de MissingField
+                // (já temos o body parseado nessa altura)
                 let txIdForCancel =
                     match err with
-                    | InvalidToken | InvalidPayload | MissingTransactionId -> None
                     | MissingField _ ->
                         try
                             let json = Newtonsoft.Json.Linq.JObject.Parse(rawBody)
@@ -71,16 +116,19 @@ let webhookHandler : HttpHandler =
                             | null -> None
                             | t ->
                                 let id = t.ToString()
-                                if System.String.IsNullOrWhiteSpace(id) then None else Some id
+                                if System.String.IsNullOrWhiteSpace(id) then None
+                                else Some id
                         with _ -> None
-                    | DuplicateTransaction txId | AmountMismatch txId | InvalidSignature txId -> Some txId
+                    | _ -> shouldCancelOnError err
 
+                // Dispara cancelamento se aplicável
                 match txIdForCancel with
                 | Some txId ->
-                    do! Webhook.Gateway.cancelTransaction txId |> Async.StartAsTask :> System.Threading.Tasks.Task
+                    do! cancelTransaction txId |> Async.StartAsTask :> System.Threading.Tasks.Task
                     saveCancelled txId response.reason
                 | None -> ()
 
+                // Atualiza response com tx_id se disponível
                 let finalResponse =
                     match txIdForCancel, response.transaction_id with
                     | Some txId, None -> { response with transaction_id = Some txId }
@@ -89,7 +137,9 @@ let webhookHandler : HttpHandler =
                 ctx.SetStatusCode statusCode
                 let body =
                     match finalResponse.transaction_id with
-                    | Some txId -> box {| status = finalResponse.status; transaction_id = txId; reason = finalResponse.reason |}
-                    | None -> box {| status = finalResponse.status; reason = finalResponse.reason |}
+                    | Some txId ->
+                        box {| status = finalResponse.status; transaction_id = txId; reason = finalResponse.reason |}
+                    | None ->
+                        box {| status = finalResponse.status; reason = finalResponse.reason |}
                 return! json body next ctx
         }

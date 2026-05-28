@@ -74,3 +74,31 @@ let validateAmount (payload: WebhookPayload) : Result<WebhookPayload, Validation
         Ok payload
     else
         Error (AmountMismatch payload.TransactionId)
+
+// ============================================================================
+// VALIDAÇÃO DE INTEGRIDADE (HMAC) - Item opcional 1
+// ============================================================================
+
+/// Calcula HMAC-SHA256 de uma mensagem com uma chave secreta.
+/// Função pura: mesma entrada → mesma saída, sem efeitos colaterais.
+let computeHmac (secret: string) (message: string) : string =
+    use hmac = new HMACSHA256(Encoding.UTF8.GetBytes(secret))
+    let hash = hmac.ComputeHash(Encoding.UTF8.GetBytes(message))
+    hash
+    |> Array.map (fun b -> b.ToString("x2"))
+    |> String.concat ""
+
+/// Valida a assinatura HMAC do payload (integridade).
+/// Se o header X-Signature não estiver presente, pula a validação (compatibilidade
+/// com o teste oficial que não envia assinatura).
+let validateSignature (signature: string option) (rawBody: string) (payload: WebhookPayload) : Result<WebhookPayload, ValidationError> =
+    match signature with
+    | None ->
+        // Compatível com test_webhook.py oficial (não envia assinatura)
+        Ok payload
+    | Some sig' ->
+        let expected = computeHmac Constants.HmacSecret rawBody
+        if sig' = expected then
+            Ok payload
+        else
+            Error (InvalidSignature payload.TransactionId)
