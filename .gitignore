@@ -1,2 +1,4 @@
 .venv
 .devcontainer
+.DS_store
+files/.DS_store
