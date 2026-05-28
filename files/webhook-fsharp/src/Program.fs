@@ -2,9 +2,11 @@ module Webhook.Program
 
 open Microsoft.AspNetCore.Builder
 open Giraffe
+open Webhook.Handlers
 
 let webApp : HttpHandler =
     choose [
+        POST >=> route "/webhook" >=> webhookHandler
         GET >=> route "/health" >=> json {| status = "ok" |}
         RequestErrors.NOT_FOUND "Not Found"
     ]
@@ -18,6 +20,6 @@ let main args =
     ) |> ignore
     let app = builder.Build()
     app.UseGiraffe webApp
-    printfn "🚀 Server rodando em http://127.0.0.1:5000"
+    printfn "🚀 Webhook server rodando em http://127.0.0.1:5000"
     app.Run()
     0
