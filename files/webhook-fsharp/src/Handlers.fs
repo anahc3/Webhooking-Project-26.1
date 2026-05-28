@@ -5,13 +5,14 @@ open Microsoft.AspNetCore.Http
 open Giraffe
 open Webhook.Domain
 open Webhook.Validation
+open Webhook.Database
 
-/// Pipeline completo de validação do payload.
 let validatePipeline (token: string option) (rawBody: string) : Result<WebhookPayload, ValidationError> =
     validateToken token
     |> Result.bind (fun _ -> parsePayload rawBody)
     |> Result.bind extractTransactionId
     |> Result.bind validateRequiredFields
+    |> Result.bind (validateNotDuplicate transactionExists)
     |> Result.bind validateAmount
 
 type ErrorResponse = {
@@ -53,13 +54,13 @@ let webhookHandler : HttpHandler =
             match result with
             | Ok payload ->
                 do! Webhook.Gateway.confirmTransaction payload.TransactionId |> Async.StartAsTask :> System.Threading.Tasks.Task
+                saveConfirmed payload
                 ctx.SetStatusCode 200
                 return! json {| status = "confirmed"; transaction_id = payload.TransactionId |} next ctx
 
             | Error err ->
                 let statusCode, response = errorToResponse err
 
-                // Extrai tx_id pra cancelar se aplicável
                 let txIdForCancel =
                     match err with
                     | InvalidToken | InvalidPayload | MissingTransactionId -> None
@@ -77,6 +78,7 @@ let webhookHandler : HttpHandler =
                 match txIdForCancel with
                 | Some txId ->
                     do! Webhook.Gateway.cancelTransaction txId |> Async.StartAsTask :> System.Threading.Tasks.Task
+                    saveCancelled txId response.reason
                 | None -> ()
 
                 let finalResponse =

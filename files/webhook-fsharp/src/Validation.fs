@@ -1,6 +1,8 @@
 module Webhook.Validation
 
 open System
+open System.Security.Cryptography
+open System.Text
 open Newtonsoft.Json.Linq
 open Webhook.Domain
 
@@ -39,6 +41,7 @@ let extractTransactionId (json: JObject) : Result<string * JObject, ValidationEr
             Ok (txId, json)
 
 /// Valida que os campos obrigatórios estão presentes.
+/// Retorna o payload completo se tudo estiver ok.
 let validateRequiredFields (txId: string, json: JObject) : Result<WebhookPayload, ValidationError> =
     let requiredFields = ["event"; "amount"; "currency"; "timestamp"]
 
@@ -56,6 +59,14 @@ let validateRequiredFields (txId: string, json: JObject) : Result<WebhookPayload
             Currency = json.["currency"].ToString()
             Timestamp = json.["timestamp"].ToString()
         }
+
+/// Valida que a transação não foi confirmada anteriormente (idempotência).
+/// Usa o banco como fonte da verdade.
+let validateNotDuplicate (existsFn: string -> bool) (payload: WebhookPayload) : Result<WebhookPayload, ValidationError> =
+    if existsFn payload.TransactionId then
+        Error (DuplicateTransaction payload.TransactionId)
+    else
+        Ok payload
 
 /// Valida que o valor e moeda batem com o esperado (veracidade da transação).
 let validateAmount (payload: WebhookPayload) : Result<WebhookPayload, ValidationError> =

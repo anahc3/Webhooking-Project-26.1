@@ -3,6 +3,7 @@ module Webhook.Program
 open Microsoft.AspNetCore.Builder
 open Giraffe
 open Webhook.Handlers
+open Webhook.Database
 
 let webApp : HttpHandler =
     choose [
@@ -13,6 +14,9 @@ let webApp : HttpHandler =
 
 [<EntryPoint>]
 let main args =
+    initDatabase ()
+    printfn "📦 Banco de dados SQLite inicializado (webhook.db)"
+
     let builder = WebApplication.CreateBuilder(args)
     builder.Services.AddGiraffe() |> ignore
     builder.WebHost.ConfigureKestrel(fun options ->
