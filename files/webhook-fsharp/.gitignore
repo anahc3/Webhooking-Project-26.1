@@ -1,0 +1,28 @@
+# Build outputs
+bin/
+obj/
+*.dll
+*.exe
+*.pdb
+
+# IDE
+.vs/
+.vscode/
+.idea/
+*.user
+
+# Database
+*.db
+*.db-journal
+
+# Certificados (não comitar chaves privadas!)
+certs/*.pfx
+certs/*.key
+certs/*.crt
+
+# OS
+.DS_Store
+Thumbs.db
+
+# Logs
+*.log
