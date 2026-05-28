@@ -6,7 +6,7 @@ Implementação de um serviço HTTP que recebe webhooks de um gateway de pagamen
 
 ---
 
-## 📋 Sumário
+## Sumário
 
 - [Arquitetura](#-arquitetura)
 - [Requisitos](#-requisitos)
@@ -127,10 +127,14 @@ cd src
 dotnet run
 ```
 
+![alt text](image.png)
+
 ### 3. Em outro terminal, rode os testes
 ```bash
 python3 test_webhook.py
 ```
+
+![alt text](image-1.png)
 
 ### Saída esperada (todos os 6 testes passando):
 ```
