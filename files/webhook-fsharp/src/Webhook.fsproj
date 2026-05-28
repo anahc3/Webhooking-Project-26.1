@@ -8,6 +8,7 @@
   <ItemGroup>
     <Compile Include="Domain.fs" />
     <Compile Include="Validation.fs" />
+    <Compile Include="Gateway.fs" />
     <Compile Include="Handlers.fs" />
     <Compile Include="Program.fs" />
   </ItemGroup>

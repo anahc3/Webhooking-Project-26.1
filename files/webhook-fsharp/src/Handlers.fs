@@ -52,14 +52,42 @@ let webhookHandler : HttpHandler =
 
             match result with
             | Ok payload ->
+                do! Webhook.Gateway.confirmTransaction payload.TransactionId |> Async.StartAsTask :> System.Threading.Tasks.Task
                 ctx.SetStatusCode 200
                 return! json {| status = "confirmed"; transaction_id = payload.TransactionId |} next ctx
+
             | Error err ->
                 let statusCode, response = errorToResponse err
+
+                // Extrai tx_id pra cancelar se aplicável
+                let txIdForCancel =
+                    match err with
+                    | InvalidToken | InvalidPayload | MissingTransactionId -> None
+                    | MissingField _ ->
+                        try
+                            let json = Newtonsoft.Json.Linq.JObject.Parse(rawBody)
+                            match json.["transaction_id"] with
+                            | null -> None
+                            | t ->
+                                let id = t.ToString()
+                                if System.String.IsNullOrWhiteSpace(id) then None else Some id
+                        with _ -> None
+                    | DuplicateTransaction txId | AmountMismatch txId | InvalidSignature txId -> Some txId
+
+                match txIdForCancel with
+                | Some txId ->
+                    do! Webhook.Gateway.cancelTransaction txId |> Async.StartAsTask :> System.Threading.Tasks.Task
+                | None -> ()
+
+                let finalResponse =
+                    match txIdForCancel, response.transaction_id with
+                    | Some txId, None -> { response with transaction_id = Some txId }
+                    | _ -> response
+
                 ctx.SetStatusCode statusCode
                 let body =
-                    match response.transaction_id with
-                    | Some txId -> box {| status = response.status; transaction_id = txId; reason = response.reason |}
-                    | None -> box {| status = response.status; reason = response.reason |}
+                    match finalResponse.transaction_id with
+                    | Some txId -> box {| status = finalResponse.status; transaction_id = txId; reason = finalResponse.reason |}
+                    | None -> box {| status = finalResponse.status; reason = finalResponse.reason |}
                 return! json body next ctx
         }
