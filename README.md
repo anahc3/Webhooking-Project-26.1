@@ -2,7 +2,7 @@
 
 Implementação de um serviço HTTP que recebe webhooks de um gateway de pagamento, valida os dados recebidos e confirma ou cancela a transação conforme apropriado. Desenvolvido em **F#** com **Giraffe** (web framework funcional sobre ASP.NET Core), seguindo princípios de programação funcional: funções puras, imutabilidade, composição via `Result.bind` e isolamento explícito de efeitos colaterais.
 
-**Projeto implementado com ajuda de IA generativa, no entanto tudo foi testado e validado**
+**Projeto implementado com ajuda de IA generativa, no entanto tudo foi testado e validado, assim como a estrutura proposta**
 
 ---
 
